@@ -1,0 +1,2159 @@
+#!/usr/bin/perl -w
+use strict;
+
+=head1 NAME
+
+check_freebsd_network - Nagios plugin to report on FreeBSD network statistics
+
+=cut
+
+# The POD text continues at the end of the file.
+
+use strict;
+
+use Data::Dumper;   ### For generating debug output in verbose mode
+use Nagios::Plugin; ### For communicating with the nagios server
+
+
+### Know what we're working with
+my %measurements = (
+	'tcp_packets_sent' => {
+		pattern => qr/(\d+) packets sent/,
+		unit_of_measurement => '',
+	},
+	'tcp_sent_data_packets' => {
+		pattern => qr/(\d+) data packets \(\d+ bytes\)/,
+		unit_of_measurement => '',
+	},
+	'tcp_sent_data_bytes' => {
+		pattern => qr/\d+ data packets \((\d+) bytes\)/,
+		unit_of_measurement => '',
+	},
+	'tcp_sent_data_packets_retransmitted' => {
+		pattern => qr/(\d+) data packets \(\d+ bytes\) retransmitted/,
+		unit_of_measurement => '',
+	},
+	'tcp_sent_data_bytes_retransmitted' => {
+		pattern => qr/\d+ data packets \((\d+) bytes\) retransmitted/,
+		unit_of_measurement => '',
+	},
+	'tcp_sent_data_packets_unnecessarily_retransmitted' => {
+		pattern => qr/(\d+) data packets unnecessarily retransmitted/,
+		unit_of_measurement => '',
+	},
+	'tcp_sent_resends_initiated_by_MTU_discovery' => {
+		pattern => qr/(\d+) resends initiated by MTU discovery/,
+		unit_of_measurement => '',
+	},
+	'tcp_sent_ack_only_packets' => {
+		pattern => qr/(\d+) ack-only packets \(\d+ delayed\)/,
+		unit_of_measurement => '',
+	},
+	'tcp_sent_ack_only_packets_delayed' => {
+		pattern => qr/\d+ ack-only packets \((\d+) delayed\)/,
+		unit_of_measurement => '',
+	},
+	'tcp_sent_URG_only_packets' => {
+		pattern => qr/(\d+) URG only packets/,
+		unit_of_measurement => '',
+	},
+	'tcp_sent_window_probe_packets' => {
+		pattern => qr/(\d+) window probe packets/,
+		unit_of_measurement => '',
+	},
+	'tcp_sent_window_update_packets' => {
+		pattern => qr/(\d+) window update packets/,
+		unit_of_measurement => '',
+	},
+	'tcp_sent_control_packets' => {
+		pattern => qr/(\d+) control packets/,
+		unit_of_measurement => '',
+	},
+	'tcp_packets_received' => {
+		pattern => qr/(\d+) packets received/,
+		unit_of_measurement => '',
+	},
+	'tcp_received_acks' => {
+		pattern => qr/(\d+) acks \(for \d+ bytes\)/,
+		unit_of_measurement => '',
+	},
+	'tcp_received_acks_within_bytes' => {
+		pattern => qr/\d+ acks \(for (\d+) bytes\)/,
+		unit_of_measurement => '',
+	},
+	'tcp_received_duplicate_acks' => {
+		pattern => qr/(\d+) duplicate acks/,
+		unit_of_measurement => '',
+	},
+	'tcp_received_acks_for_unsent_data' => {
+		pattern => qr/(\d+) acks for unsent data/,
+		unit_of_measurement => '',
+	},
+	'tcp_received_packets_in_sequence' => {
+		pattern => qr/(\d+) packets \(\d+ bytes\) received in-sequence/,
+		unit_of_measurement => '',
+	},
+	'tcp_received_bytes_in_sequence' => {
+		pattern => qr/\d+ packets \((\d+) bytes\) received in-sequence/,
+		unit_of_measurement => '',
+	},
+	'tcp_received_completely_duplicate_packets' => {
+		pattern => qr/(\d+) completely duplicate packets \(\d+ bytes\)/,
+		unit_of_measurement => '',
+	},
+	'tcp_received_completely_duplicate_packets_byte_total' => {
+		pattern => qr/\d+ completely duplicate packets \((\d+) bytes\)/,
+		unit_of_measurement => '',
+	},
+	'tcp_received_old_duplicate_packets' => {
+		pattern => qr/(\d+) old duplicate packets/,
+		unit_of_measurement => '',
+	},
+	'tcp_received_packets_with_some_dup_data' => {
+		pattern => qr/(\d+) packets with some dup. data \(\d+ bytes duped\)/,
+		unit_of_measurement => '',
+	},
+	'tcp_received_packets_with_some_dup_data_bytes_total' => {
+		pattern => qr/\d+ packets with some dup. data \((\d+) bytes duped\)/,
+		unit_of_measurement => '',
+	},
+	'tcp_received_out_of_order_packets' => {
+		pattern => qr/(\d+) out-of-order packets \(\d+ bytes\)/,
+		unit_of_measurement => '',
+	},
+	'tcp_received_out_of_order_packets_byte_total' => {
+		pattern => qr/\d+ out-of-order packets \((\d+) bytes\)/,
+		unit_of_measurement => '',
+	},
+	'tcp_received_packets_of_data_after_window' => {
+		pattern => qr/(\d+) packets \(\d+ bytes\) of data after window/,
+		unit_of_measurement => '',
+	},
+	'tcp_received_bytes_of_data_after_window' => {
+		pattern => qr/\d+ packets \((\d+) bytes\) of data after window/,
+		unit_of_measurement => '',
+	},
+	'tcp_received_window_probes' => {
+		pattern => qr/(\d+) window probes/,
+		unit_of_measurement => '',
+	},
+	'tcp_received_window_update_packets' => {
+		pattern => qr/(\d+) window update packets/,
+		unit_of_measurement => '',
+	},
+	'tcp_received_packets_received_after_close' => {
+		pattern => qr/(\d+) packets received after close/,
+		unit_of_measurement => '',
+	},
+	'tcp_received_packets_discarded_for_bad_checksums' => {
+		pattern => qr/(\d+) discarded for bad checksums/,
+		unit_of_measurement => '',
+	},
+	'tcp_received_packets_discarded_for_bad_header_offset_fields' => {
+		pattern => qr/(\d+) discarded for bad header offset fields/,
+		unit_of_measurement => '',
+	},
+	'tcp_received_packets_discarded_because_packet_too_short' => {
+		pattern => qr/(\d+) discarded because packet too short/,
+		unit_of_measurement => '',
+	},
+	'tcp_received_packets_discarded_due_to_memory_problems' => {
+		pattern => qr/(\d+) discarded due to memory problems/,
+		unit_of_measurement => '',
+	},
+	'tcp_connection_requests' => {
+		pattern => qr/(\d+) connection requests/,
+		unit_of_measurement => '',
+	},
+	'tcp_connection_accepts' => {
+		pattern => qr/(\d+) connection accepts/,
+		unit_of_measurement => '',
+	},
+	'tcp_bad_connection_attempts' => {
+		pattern => qr/(\d+) bad connection attempts/,
+		unit_of_measurement => '',
+	},
+	'tcp_listen_queue_overflows' => {
+		pattern => qr/(\d+) listen queue overflows/,
+		unit_of_measurement => '',
+	},
+	'tcp_ignored_RSTs_in_the_windows' => {
+		pattern => qr/(\d+) ignored RSTs in the windows/,
+		unit_of_measurement => '',
+	},
+	'tcp_connections_established_including_accepts' => {
+		pattern => qr/(\d+) connections established \(including accepts\)/,
+		unit_of_measurement => '',
+	},
+	'tcp_connections_closed' => {
+		pattern => qr/(\d+) connections closed \(including \d+ drops\)/,
+		unit_of_measurement => '',
+	},
+	'tcp_connections_dropped' => {
+		pattern => qr/\d+ connections closed \(including (\d+) drops\)/,
+		unit_of_measurement => '',
+	},
+	'tcp_connections_updated_cached_RTT_on_close' => {
+		pattern => qr/(\d+) connections updated cached RTT on close/,
+		unit_of_measurement => '',
+	},
+	'tcp_connections_updated_cached_RTT_variance_on_close' => {
+		pattern => qr/(\d+) connections updated cached RTT variance on close/,
+		unit_of_measurement => '',
+	},
+	'tcp_connections_updated_cached_ssthresh_on_close' => {
+		pattern => qr/(\d+) connections updated cached ssthresh on close/,
+		unit_of_measurement => '',
+	},
+	'tcp_embryonic_connections_dropped' => {
+		pattern => qr/(\d+) embryonic connections dropped/,
+		unit_of_measurement => '',
+	},
+	'tcp_segments_updated_rtt' => {
+		pattern => qr/(\d+) segments updated rtt \(of \d+ attempts\)/,
+		unit_of_measurement => '',
+	},
+	'tcp_segments_update_rtt_attempts' => {
+		pattern => qr/\d+ segments updated rtt \(of (\d+) attempts\)/,
+		unit_of_measurement => '',
+	},
+	'tcp_retransmit_timeouts' => {
+		pattern => qr/(\d+) retransmit timeouts/,
+		unit_of_measurement => '',
+	},
+	'tcp_connections_dropped_by_rexmit_timeout' => {
+		pattern => qr/(\d+) connections dropped by rexmit timeout/,
+		unit_of_measurement => '',
+	},
+	'tcp_persist_timeouts' => {
+		pattern => qr/(\d+) persist timeouts/,
+		unit_of_measurement => '',
+	},
+	'tcp_connections_dropped_by_persist_timeout' => {
+		pattern => qr/(\d+) connections dropped by persist timeout/,
+		unit_of_measurement => '',
+	},
+	'tcp_connections_dropped_because_of_timeout' => {
+		pattern => qr/(\d+) Connections \(fin_wait_(\d+)\) dropped because of timeout/,
+		unit_of_measurement => '',
+	},
+	'tcp_keepalive_timeouts' => {
+		pattern => qr/(\d+) keepalive timeouts/,
+		unit_of_measurement => '',
+	},
+	'tcp_keepalive_probes_sent' => {
+		pattern => qr/(\d+) keepalive probes sent/,
+		unit_of_measurement => '',
+	},
+	'tcp_connections_dropped_by_keepalive' => {
+		pattern => qr/(\d+) connections dropped by keepalive/,
+		unit_of_measurement => '',
+	},
+	'tcp_correct_ACK_header_predictions' => {
+		pattern => qr/(\d+) correct ACK header predictions/,
+		unit_of_measurement => '',
+	},
+	'tcp_correct_data_packet_header_predictions' => {
+		pattern => qr/(\d+) correct data packet header predictions/,
+		unit_of_measurement => '',
+	},
+	'tcp_syncache_entries_added' => {
+		pattern => qr/(\d+) syncache entries added/,
+		unit_of_measurement => '',
+	},
+	'tcp_syncache_entries_retransmitted' => {
+		pattern => qr/(\d+) retransmitted/,
+		unit_of_measurement => '',
+	},
+	'tcp_syncache_entries_dupsyn' => {
+		pattern => qr/(\d+) dupsyn/,
+		unit_of_measurement => '',
+	},
+	'tcp_syncache_entries_dropped' => {
+		pattern => qr/(\d+) dropped/,
+		unit_of_measurement => '',
+	},
+	'tcp_syncache_entries_completed' => {
+		pattern => qr/(\d+) completed/,
+		unit_of_measurement => '',
+	},
+	'tcp_syncache_entries_bucket_overflow' => {
+		pattern => qr/(\d+) bucket overflow/,
+		unit_of_measurement => '',
+	},
+	'tcp_syncache_entries_cache_overflow' => {
+		pattern => qr/(\d+) cache overflow/,
+		unit_of_measurement => '',
+	},
+	'tcp_syncache_entries_reset' => {
+		pattern => qr/(\d+) reset/,
+		unit_of_measurement => '',
+	},
+	'tcp_syncache_entries_stale' => {
+		pattern => qr/(\d+) stale/,
+		unit_of_measurement => '',
+	},
+	'tcp_syncache_entries_aborted' => {
+		pattern => qr/(\d+) aborted/,
+		unit_of_measurement => '',
+	},
+	'tcp_syncache_entries_badack' => {
+		pattern => qr/(\d+) badack/,
+		unit_of_measurement => '',
+	},
+	'tcp_syncache_entries_unreach' => {
+		pattern => qr/(\d+) unreach/,
+		unit_of_measurement => '',
+	},
+	'tcp_syncache_entries_zone_failures' => {
+		pattern => qr/(\d+) zone failures/,
+		unit_of_measurement => '',
+	},
+	'tcp_cookies_sent' => {
+		pattern => qr/(\d+) cookies sent/,
+		unit_of_measurement => '',
+	},
+	'tcp_cookies_received' => {
+		pattern => qr/(\d+) cookies received/,
+		unit_of_measurement => '',
+	},
+	'tcp_SACK_recovery_episodes' => {
+		pattern => qr/(\d+) SACK recovery episodes/,
+		unit_of_measurement => '',
+	},
+	'tcp_segment_rexmits_in_SACK_recovery_episodes' => {
+		pattern => qr/(\d+) segment rexmits in SACK recovery episodes/,
+		unit_of_measurement => '',
+	},
+	'tcp_byte_rexmits_in_SACK_recovery_episodes' => {
+		pattern => qr/(\d+) byte rexmits in SACK recovery episodes/,
+		unit_of_measurement => '',
+	},
+	'tcp_SACK_options_received' => {
+		pattern => qr/(\d+) SACK options \(SACK blocks\) received/,
+		unit_of_measurement => '',
+	},
+	'tcp_SACK_options_sent' => {
+		pattern => qr/(\d+) SACK options \(SACK blocks\) sent/,
+		unit_of_measurement => '',
+	},
+	'tcp_SACK_scoreboard_overflow' => {
+		pattern => qr/(\d+) SACK scoreboard overflow/,
+		unit_of_measurement => '',
+	},
+	'udp_datagrams_received' => {
+		pattern => qr/(\d+) datagrams received/,
+		unit_of_measurement => '',
+	},
+	'udp_with_incomplete_header' => {
+		pattern => qr/(\d+) with incomplete header/,
+		unit_of_measurement => '',
+	},
+	'udp_with_bad_data_length_field' => {
+		pattern => qr/(\d+) with bad data length field/,
+		unit_of_measurement => '',
+	},
+	'udp_with_bad_checksum' => {
+		pattern => qr/(\d+) with bad checksum/,
+		unit_of_measurement => '',
+	},
+	'udp_with_no_checksum' => {
+		pattern => qr/(\d+) with no checksum/,
+		unit_of_measurement => '',
+	},
+	'udp_dropped_due_to_no_socket' => {
+		pattern => qr/(\d+) dropped due to no socket/,
+		unit_of_measurement => '',
+	},
+	'udp_broadcast_multicast_datagrams_undelivered' => {
+		pattern => qr/(\d+) broadcast\/multicast datagrams undelivered/,
+		unit_of_measurement => '',
+	},
+	'udp_dropped_due_to_full_socket_buffers' => {
+		pattern => qr/(\d+) dropped due to full socket buffers/,
+		unit_of_measurement => '',
+	},
+	'udp_dropped_not_for_hashed_pcb' => {
+		pattern => qr/(\d+) not for hashed pcb/,
+		unit_of_measurement => '',
+	},
+	'udp_delivered' => {
+		pattern => qr/(\d+) delivered/,
+		unit_of_measurement => '',
+	},
+	'udp_datagrams_output' => {
+		pattern => qr/(\d+) datagrams output/,
+		unit_of_measurement => '',
+	},
+	'udp_times_multicast_source_filter_matched' => {
+		pattern => qr/(\d+) times multicast source filter matched/,
+		unit_of_measurement => '',
+	},
+	'sctp_input_packets' => {
+		pattern => qr/(\d+) input packets/,
+		unit_of_measurement => '',
+	},
+	'sctp_input_datagrams' => {
+		pattern => qr/(\d+) datagrams/,
+		unit_of_measurement => '',
+	},
+	'sctp_input_packets_that_had_data' => {
+		pattern => qr/(\d+) packets that had data/,
+		unit_of_measurement => '',
+	},
+	'sctp_input_SACK_chunks' => {
+		pattern => qr/(\d+) input SACK chunks/,
+		unit_of_measurement => '',
+	},
+	'sctp_input_DATA_chunks' => {
+		pattern => qr/(\d+) input DATA chunks/,
+		unit_of_measurement => '',
+	},
+	'sctp_input_duplicate_DATA_chunks' => {
+		pattern => qr/(\d+) duplicate DATA chunks/,
+		unit_of_measurement => '',
+	},
+	'sctp_input_HB_chunks' => {
+		pattern => qr/(\d+) input HB chunks/,
+		unit_of_measurement => '',
+	},
+	'sctp_input_HB_ACK_chunks' => {
+		pattern => qr/(\d+) HB-ACK chunks/,
+		unit_of_measurement => '',
+	},
+	'sctp_input_ECNE_chunks' => {
+		pattern => qr/(\d+) input ECNE chunks/,
+		unit_of_measurement => '',
+	},
+	'sctp_input_AUTH_chunks' => {
+		pattern => qr/(\d+) input AUTH chunks/,
+		unit_of_measurement => '',
+	},
+	'sctp_input_chunks_missing_AUTH' => {
+		pattern => qr/(\d+) chunks missing AUTH/,
+		unit_of_measurement => '',
+	},
+	'sctp_invalid_HMAC_ids_received' => {
+		pattern => qr/(\d+) invalid HMAC ids received/,
+		unit_of_measurement => '',
+	},
+	'sctp_invalid_secret_ids_received' => {
+		pattern => qr/(\d+) invalid secret ids received/,
+		unit_of_measurement => '',
+	},
+	'sctp_input_auth_failed' => {
+		pattern => qr/(\d+) auth failed/,
+		unit_of_measurement => '',
+	},
+	'sctp_input_fast_path_receives_all_one_chunk' => {
+		pattern => qr/(\d+) fast path receives all one chunk/,
+		unit_of_measurement => '',
+	},
+	'sctp_input_fast_path_multi_part_data' => {
+		pattern => qr/(\d+) fast path multi-part data/,
+		unit_of_measurement => '',
+	},
+	'sctp_output_packets' => {
+		pattern => qr/(\d+) output packets/,
+		unit_of_measurement => '',
+	},
+	'sctp_output_SACKs' => {
+		pattern => qr/(\d+) output SACKs/,
+		unit_of_measurement => '',
+	},
+	'sctp_output_DATA_chunks' => {
+		pattern => qr/(\d+) output DATA chunks/,
+		unit_of_measurement => '',
+	},
+	'sctp_retransmitted_DATA_chunks' => {
+		pattern => qr/(\d+) retransmitted DATA chunks/,
+		unit_of_measurement => '',
+	},
+	'sctp_fast_retransmitted_DATA_chunks' => {
+		pattern => qr/(\d+) fast retransmitted DATA chunks/,
+		unit_of_measurement => '',
+	},
+	'sctp_FRs_that_happened_more_than_once_to_same_chunk_' => {
+		pattern => qr/(\d+) FR's that happened more than once to same chunk./,
+		unit_of_measurement => '',
+	},
+	'sctp_intput_HB_chunks' => {
+		pattern => qr/(\d+) intput HB chunks/,
+		unit_of_measurement => '',
+	},
+	'sctp_output_ECNE_chunks' => {
+		pattern => qr/(\d+) output ECNE chunks/,
+		unit_of_measurement => '',
+	},
+	'sctp_output_AUTH_chunks' => {
+		pattern => qr/(\d+) output AUTH chunks/,
+		unit_of_measurement => '',
+	},
+	'sctp_ip_output_error_counter' => {
+		pattern => qr/(\d+) ip_output error counter/,
+		unit_of_measurement => '',
+	},
+	'sctp_packet_dropped_from_middle_box' => {
+		pattern => qr/(\d+) from middle box/,
+		unit_of_measurement => '',
+	},
+	'sctp_packet_dropped_from_end_host' => {
+		pattern => qr/(\d+) from end host/,
+		unit_of_measurement => '',
+	},
+	'sctp_packet_dropped_with_data' => {
+		pattern => qr/(\d+) with data/,
+		unit_of_measurement => '',
+	},
+	'sctp_packet_dropped_non_data_non_endhost' => {
+		pattern => qr/(\d+) non-data, non-endhost/,
+		unit_of_measurement => '',
+	},
+	'sctp_packet_dropped_non_endhost_bandwidth_rep_only' => {
+		pattern => qr/(\d+) non-endhost, bandwidth rep only/,
+		unit_of_measurement => '',
+	},
+	'sctp_packet_dropped_not_enough_for_chunk_header' => {
+		pattern => qr/(\d+) not enough for chunk header/,
+		unit_of_measurement => '',
+	},
+	'sctp_packet_dropped_not_enough_data_to_confirm' => {
+		pattern => qr/(\d+) not enough data to confirm/,
+		unit_of_measurement => '',
+	},
+	'sctp_packet_dropped_where_process_chunk_drop_said_break' => {
+		pattern => qr/(\d+) where process_chunk_drop said break/,
+		unit_of_measurement => '',
+	},
+	'sctp_packet_dropped_failed_to_find_TSN' => {
+		pattern => qr/(\d+) failed to find TSN/,
+		unit_of_measurement => '',
+	},
+	'sctp_packet_dropped_attempt_reverse_TSN_lookup' => {
+		pattern => qr/(\d+) attempt reverse TSN lookup/,
+		unit_of_measurement => '',
+	},
+	'sctp_packet_dropped_e_host_confirms_zero_rwnd' => {
+		pattern => qr/(\d+) e-host confirms zero-rwnd/,
+		unit_of_measurement => '',
+	},
+	'sctp_packet_dropped_midbox_confirms_no_space' => {
+		pattern => qr/(\d+) midbox confirms no space/,
+		unit_of_measurement => '',
+	},
+	'sctp_packet_dropped_data_did_not_match_TSN' => {
+		pattern => qr/(\d+) data did not match TSN/,
+		unit_of_measurement => '',
+	},
+	'sctp_packet_dropped_TSN_s_marked_for_Fast_Retran' => {
+		pattern => qr/(\d+) TSN's marked for Fast Retran/,
+		unit_of_measurement => '',
+	},
+	'sctp_timeouts_iterator_timers_fired' => {
+		pattern => qr/(\d+) iterator timers fired/,
+		unit_of_measurement => '',
+	},
+	'sctp_timeouts_T3_data_time_outs' => {
+		pattern => qr/(\d+) T3 data time outs/,
+		unit_of_measurement => '',
+	},
+	'sctp_timeouts_window_probe_timers_fired' => {
+		pattern => qr/(\d+) window probe \(T3\) timers fired/,
+		unit_of_measurement => '',
+	},
+	'sctp_timeouts_INIT_timers_fired' => {
+		pattern => qr/(\d+) INIT timers fired/,
+		unit_of_measurement => '',
+	},
+	'sctp_timeouts_sack_timers_fired' => {
+		pattern => qr/(\d+) sack timers fired/,
+		unit_of_measurement => '',
+	},
+	'sctp_timeouts_shutdown_timers_fired' => {
+		pattern => qr/(\d+) shutdown timers fired/,
+		unit_of_measurement => '',
+	},
+	'sctp_timeouts_heartbeat_timers_fired' => {
+		pattern => qr/(\d+) heartbeat timers fired/,
+		unit_of_measurement => '',
+	},
+	'sctp_timeouts_a_cookie_timeout_fired' => {
+		pattern => qr/(\d+) a cookie timeout fired/,
+		unit_of_measurement => '',
+	},
+	'sctp_timeouts_an_endpoint_changed_its_cookiesecret' => {
+		pattern => qr/(\d+) an endpoint changed its cookiesecret/,
+		unit_of_measurement => '',
+	},
+	'sctp_timeouts_PMTU_timers_fired' => {
+		pattern => qr/(\d+) PMTU timers fired/,
+		unit_of_measurement => '',
+	},
+	'sctp_timeouts_shutdown_ack_timers_fired' => {
+		pattern => qr/(\d+) shutdown ack timers fired/,
+		unit_of_measurement => '',
+	},
+	'sctp_timeouts_shutdown_guard_timers_fired' => {
+		pattern => qr/(\d+) shutdown guard timers fired/,
+		unit_of_measurement => '',
+	},
+	'sctp_timeouts_stream_reset_timers_fired' => {
+		pattern => qr/(\d+) stream reset timers fired/,
+		unit_of_measurement => '',
+	},
+	'sctp_timeouts_early_FR_timers_fired' => {
+		pattern => qr/(\d+) early FR timers fired/,
+		unit_of_measurement => '',
+	},
+	'sctp_timeouts_an_asconf_timer_fired' => {
+		pattern => qr/(\d+) an asconf timer fired/,
+		unit_of_measurement => '',
+	},
+	'sctp_timeouts_auto_close_timer_fired' => {
+		pattern => qr/(\d+) auto close timer fired/,
+		unit_of_measurement => '',
+	},
+	'sctp_timeouts_asoc_free_timers_expired' => {
+		pattern => qr/(\d+) asoc free timers expired/,
+		unit_of_measurement => '',
+	},
+	'sctp_timeouts_inp_free_timers_expired' => {
+		pattern => qr/(\d+) inp free timers expired/,
+		unit_of_measurement => '',
+	},
+	'sctp_packet_shorter_than_header' => {
+		pattern => qr/(\d+) packet shorter than header/,
+		unit_of_measurement => '',
+	},
+	'sctp_checksum_error' => {
+		pattern => qr/(\d+) checksum error/,
+		unit_of_measurement => '',
+	},
+	'sctp_no_endpoint_for_port' => {
+		pattern => qr/(\d+) no endpoint for port/,
+		unit_of_measurement => '',
+	},
+	'sctp_bad_v_tag' => {
+		pattern => qr/(\d+) bad v-tag/,
+		unit_of_measurement => '',
+	},
+	'sctp_bad_SID' => {
+		pattern => qr/(\d+) bad SID/,
+		unit_of_measurement => '',
+	},
+	'sctp_no_memory' => {
+		pattern => qr/(\d+) no memory/,
+		unit_of_measurement => '',
+	},
+	'sctp_number_of_multiple_FR_in_a_RTT_window' => {
+		pattern => qr/(\d+) number of multiple FR in a RTT window/,
+		unit_of_measurement => '',
+	},
+	'sctp_RFC813_allowed_sending' => {
+		pattern => qr/(\d+) RFC813 allowed sending/,
+		unit_of_measurement => '',
+	},
+	'sctp_RFC813_does_not_allow_sending' => {
+		pattern => qr/(\d+) RFC813 does not allow sending/,
+		unit_of_measurement => '',
+	},
+	'sctp_max_burst_dosnt_allow_sending' => {
+		pattern => qr/(\d+) max burst dosn't allow sending/,
+		unit_of_measurement => '',
+	},
+	'sctp_look_ahead_tells_us_no_memory_in_interface' => {
+		pattern => qr/(\d+) look ahead tells us no memory in interface/,
+		unit_of_measurement => '',
+	},
+	'sctp_numbers_of_window_probes_sent' => {
+		pattern => qr/(\d+) numbers of window probes sent/,
+		unit_of_measurement => '',
+	},
+	'sctp_times_an_output_error_to_clamp_down_on_next_user_send' => {
+		pattern => qr/(\d+) times an output error to clamp down on next user send\./,
+		unit_of_measurement => '',
+	},
+	'sctp_times_sctp_senderrors_were_caused_from_a_user' => {
+		pattern => qr/(\d+) times sctp_senderrors were caused from a user/,
+		unit_of_measurement => '',
+	},
+	'sctp_number_of_in_data_drops_due_to_chunk_limit_reached' => {
+		pattern => qr/(\d+) number of in data drops due to chunk limit reached/,
+		unit_of_measurement => '',
+	},
+	'sctp_number_of_in_data_drops_due_to_rwnd_limit_reached' => {
+		pattern => qr/(\d+) number of in data drops due to rwnd limit reached/,
+		unit_of_measurement => '',
+	},
+	'sctp_times_a_ECN_reduced_the_cwnd' => {
+		pattern => qr/(\d+) times a ECN reduced the cwnd/,
+		unit_of_measurement => '',
+	},
+	'sctp_used_express_lookup_via_vtag' => {
+		pattern => qr/(\d+) used express lookup via vtag/,
+		unit_of_measurement => '',
+	},
+	'sctp_collision_in_express_lookup_' => {
+		pattern => qr/(\d+) collision in express lookup\./,
+		unit_of_measurement => '',
+	},
+	'sctp_times_the_sender_ran_dry_of_user_data_on_primary' => {
+		pattern => qr/(\d+) times the sender ran dry of user data on primary/,
+		unit_of_measurement => '',
+	},
+	'sctp_same_for_above' => {
+		pattern => qr/(\d+) same for above/,
+		unit_of_measurement => '',
+	},
+	'sctp_sacks_the_slow_way' => {
+		pattern => qr/(\d+) sacks the slow way/,
+		unit_of_measurement => '',
+	},
+	'sctp_window_update_only_sacks_sent' => {
+		pattern => qr/(\d+) window update only sacks sent/,
+		unit_of_measurement => '',
+	},
+	'sctp_sends_with_sinfo_nonzero_flags' => {
+		pattern => qr/(\d+) sends with sinfo_flags \!\=0/,
+		unit_of_measurement => '',
+	},
+	'sctp_unordered_sends' => {
+		pattern => qr/(\d+) unordered sends/,
+		unit_of_measurement => '',
+	},
+	'sctp_sends_with_EOF_flag_set' => {
+		pattern => qr/(\d+) sends with EOF flag set/,
+		unit_of_measurement => '',
+	},
+	'sctp_sends_with_ABORT_flag_set' => {
+		pattern => qr/(\d+) sends with ABORT flag set/,
+		unit_of_measurement => '',
+	},
+	'sctp_times_protocol_drain_called' => {
+		pattern => qr/(\d+) times protocol drain called/,
+		unit_of_measurement => '',
+	},
+	'sctp_times_we_did_a_protocol_drain' => {
+		pattern => qr/(\d+) times we did a protocol drain/,
+		unit_of_measurement => '',
+	},
+	'sctp_times_recv_was_called_with_peek' => {
+		pattern => qr/(\d+) times recv was called with peek/,
+		unit_of_measurement => '',
+	},
+	'sctp_cached_chunks_used' => {
+		pattern => qr/(\d+) cached chunks used/,
+		unit_of_measurement => '',
+	},
+	'sctp_cached_stream_oqs_used' => {
+		pattern => qr/(\d+) cached stream oq's used/,
+		unit_of_measurement => '',
+	},
+	'sctp_unread_messages_abandonded_by_close' => {
+		pattern => qr/(\d+) unread messages abandonded by close/,
+		unit_of_measurement => '',
+	},
+	'sctp_send_burst_avoidance_already_max_burst_inflight_to_net' => {
+		pattern => qr/(\d+) send burst avoidance, already max burst inflight to net/,
+		unit_of_measurement => '',
+	},
+	'sctp_send_cwnd_full_avoidance_already_max_burst_inflight_to_net' => {
+		pattern => qr/(\d+) send cwnd full avoidance, already max burst inflight to net/,
+		unit_of_measurement => '',
+	},
+	'sctp_number_of_map_array_over_runs_via_fwd_tsns' => {
+		pattern => qr/(\d+) number of map array over-runs via fwd-tsn's/,
+		unit_of_measurement => '',
+	},
+	'ip_total_packets_received' => {
+		pattern => qr/(\d+) total packets received/,
+		unit_of_measurement => '',
+	},
+	'ip_bad_header_checksums' => {
+		pattern => qr/(\d+) bad header checksums/,
+		unit_of_measurement => '',
+	},
+	'ip_with_size_smaller_than_minimum' => {
+		pattern => qr/(\d+) with size smaller than minimum/,
+		unit_of_measurement => '',
+	},
+	'ip_with_data_size_less_than_data_length' => {
+		pattern => qr/(\d+) with data size \< data length/,
+		unit_of_measurement => '',
+	},
+	'ip_with_ip_length_greater_than_max_ip_packet_size' => {
+		pattern => qr/(\d+) with ip length \> max ip packet size/,
+		unit_of_measurement => '',
+	},
+	'ip_with_header_length_less_than_data_size' => {
+		pattern => qr/(\d+) with header length \< data size/,
+		unit_of_measurement => '',
+	},
+	'ip_with_data_length_less_than_header_length' => {
+		pattern => qr/(\d+) with data length \< header length/,
+		unit_of_measurement => '',
+	},
+	'ip_with_bad_options' => {
+		pattern => qr/(\d+) with bad options/,
+		unit_of_measurement => '',
+	},
+	'ip_with_incorrect_version_number' => {
+		pattern => qr/(\d+) with incorrect version number/,
+		unit_of_measurement => '',
+	},
+	'ip_fragments_received' => {
+		pattern => qr/(\d+) fragments received/,
+		unit_of_measurement => '',
+	},
+	'ip_fragments_dropped_for_dup_or_out_of_space' => {
+		pattern => qr/(\d+) fragments dropped \(dup or out of space\)/,
+		unit_of_measurement => '',
+	},
+	'ip_fragments_dropped_after_timeout' => {
+		pattern => qr/(\d+) fragments dropped after timeout/,
+		unit_of_measurement => '',
+	},
+	'ip_packets_reassembled_ok' => {
+		pattern => qr/(\d+) packets reassembled ok/,
+		unit_of_measurement => '',
+	},
+	'ip_packets_for_this_host' => {
+		pattern => qr/(\d+) packets for this host/,
+		unit_of_measurement => '',
+	},
+	'ip_packets_for_unknown_or_unsupported_protocol' => {
+		pattern => qr/(\d+) packets for unknown\/unsupported protocol/,
+		unit_of_measurement => '',
+	},
+	'ip_packets_forwarded' => {
+		pattern => qr/(\d+) packets forwarded \(\d+ packets fast forwarded\)/,
+		unit_of_measurement => '',
+	},
+	'ip_packets_fast_forwarded' => {
+		pattern => qr/\d+ packets forwarded \((\d+) packets fast forwarded\)/,
+		unit_of_measurement => '',
+	},
+	'ip_packets_not_forwardable' => {
+		pattern => qr/(\d+) packets not forwardable/,
+		unit_of_measurement => '',
+	},
+	'ip_packets_received_for_unknown_multicast_group' => {
+		pattern => qr/(\d+) packets received for unknown multicast group/,
+		unit_of_measurement => '',
+	},
+	'ip_redirects_sent' => {
+		pattern => qr/(\d+) redirects sent/,
+		unit_of_measurement => '',
+	},
+	'ip_packets_sent_from_this_host' => {
+		pattern => qr/(\d+) packets sent from this host/,
+		unit_of_measurement => '',
+	},
+	'ip_packets_sent_with_fabricated_ip_header' => {
+		pattern => qr/(\d+) packets sent with fabricated ip header/,
+		unit_of_measurement => '',
+	},
+	'ip_output_packets_dropped' => {
+		pattern => qr/(\d+) output packets dropped due to no bufs, etc./,
+		unit_of_measurement => '',
+	},
+	'ip_output_packets_discarded_due_to_no_route' => {
+		pattern => qr/(\d+) output packets discarded due to no route/,
+		unit_of_measurement => '',
+	},
+	'ip_output_datagrams_fragmented' => {
+		pattern => qr/(\d+) output datagrams fragmented/,
+		unit_of_measurement => '',
+	},
+	'ip_fragments_created' => {
+		pattern => qr/(\d+) fragments created/,
+		unit_of_measurement => '',
+	},
+	'ip_datagrams_that_cant_be_fragmented' => {
+		pattern => qr/(\d+) datagrams that can't be fragmented/,
+		unit_of_measurement => '',
+	},
+	'ip_tunneling_packets_that_cant_find_gif' => {
+		pattern => qr/(\d+) tunneling packets that can't find gif/,
+		unit_of_measurement => '',
+	},
+	'ip_datagrams_with_bad_address_in_header' => {
+		pattern => qr/(\d+) datagrams with bad address in header/,
+		unit_of_measurement => '',
+	},
+	'icmp_calls_to_icmp_error' => {
+		pattern => qr/(\d+) calls to icmp_error/,
+		unit_of_measurement => '',
+	},
+	'icmp_errors_not_generated_in_response_to_an_icmp_message' => {
+		pattern => qr/(\d+) errors not generated in response to an icmp message/,
+		unit_of_measurement => '',
+	},
+	'icmp_echo_reply_output' => {
+		pattern => qr/echo reply: (\d+)/,
+		unit_of_measurement => '',
+	},
+	'icmp_destination_unreachable_output' => {
+		pattern => qr/destination unreachable: (\d+)/,
+		unit_of_measurement => '',
+	},
+	'icmp_messages_with_bad_code_fields' => {
+		pattern => qr/(\d+) messages with bad code fields/,
+		unit_of_measurement => '',
+	},
+	'icmp_messages_less_than_minimum_length' => {
+		pattern => qr/(\d+) messages \< minimum length/,
+		unit_of_measurement => '',
+	},
+	'icmp_bad_checksums' => {
+		pattern => qr/(\d+) bad checksums/,
+		unit_of_measurement => '',
+	},
+	'icmp_messages_with_bad_length' => {
+		pattern => qr/(\d+) messages with bad length/,
+		unit_of_measurement => '',
+	},
+	'icmp_multicast_echo_requests_ignored' => {
+		pattern => qr/(\d+) multicast echo requests ignored/,
+		unit_of_measurement => '',
+	},
+	'icmp_multicast_timestamp_requests_ignored' => {
+		pattern => qr/(\d+) multicast timestamp requests ignored/,
+		unit_of_measurement => '',
+	},
+	'icmp_echo_reply_input' => {
+		pattern => qr/echo reply: (\d+)/,
+		unit_of_measurement => '',
+	},
+	'icmp_destination_unreachable_input' => {
+		pattern => qr/destination unreachable: (\d+)/,
+		unit_of_measurement => '',
+	},
+	'icmp_routing_redirect_input' => {
+		pattern => qr/routing redirect: (\d+)/,
+		unit_of_measurement => '',
+	},
+	'icmp_echo_input' => {
+		pattern => qr/echo: (\d+)/,
+		unit_of_measurement => '',
+	},
+	'icmp_time_exceeded_input' => {
+		pattern => qr/time exceeded: (\d+)/,
+		unit_of_measurement => '',
+	},
+	'icmp_message_responses_generated' => {
+		pattern => qr/(\d+) message responses generated/,
+		unit_of_measurement => '',
+	},
+	'icmp_invalid_return_addresses' => {
+		pattern => qr/(\d+) invalid return addresses/,
+		unit_of_measurement => '',
+	},
+	'icmp_no_return_routes' => {
+		pattern => qr/(\d+) no return routes/,
+		unit_of_measurement => '',
+	},
+	'icmp_ICMP_address_mask_responses_are_disabled' => {
+		pattern => qr/ICMP address mask responses are disabled/,
+		unit_of_measurement => '',
+	},
+	'igmp_messages_received' => {
+		pattern => qr/(\d+) messages received/,
+		unit_of_measurement => '',
+	},
+	'igmp_messages_received_with_too_few_bytes' => {
+		pattern => qr/(\d+) messages received with too few bytes/,
+		unit_of_measurement => '',
+	},
+	'igmp_messages_received_with_bad_checksum' => {
+		pattern => qr/(\d+) messages received with bad checksum/,
+		unit_of_measurement => '',
+	},
+	'igmp_membership_queries_received' => {
+		pattern => qr/(\d+) membership queries received/,
+		unit_of_measurement => '',
+	},
+	'igmp_membership_queries_received_with_invalid_field' => {
+		pattern => qr/(\d+) membership queries received with invalid field\(s\)/,
+		unit_of_measurement => '',
+	},
+	'igmp_membership_reports_received' => {
+		pattern => qr/(\d+) membership reports received/,
+		unit_of_measurement => '',
+	},
+	'igmp_membership_reports_received_with_invalid_field' => {
+		pattern => qr/(\d+) membership reports received with invalid field\(s\)/,
+		unit_of_measurement => '',
+	},
+	'igmp_membership_reports_received_for_groups_to_which_we_belong' => {
+		pattern => qr/(\d+) membership reports received for groups to which we belong/,
+		unit_of_measurement => '',
+	},
+	'igmp_membership_reports_sent' => {
+		pattern => qr/(\d+) membership reports sent/,
+		unit_of_measurement => '',
+	},
+	'ip6_total_packets_received' => {
+		pattern => qr/(\d+) total packets received/,
+		unit_of_measurement => '',
+	},
+	'ip6_packets_received_with_size_smaller_than_minimum' => {
+		pattern => qr/(\d+) with size smaller than minimum/,
+		unit_of_measurement => '',
+	},
+	'ip6_packets_received_with_data_size_less_than_data_length' => {
+		pattern => qr/(\d+) with data size \< data length/,
+		unit_of_measurement => '',
+	},
+	'ip6_with_bad_options' => {
+		pattern => qr/(\d+) with bad options/,
+		unit_of_measurement => '',
+	},
+	'ip6_with_incorrect_version_number' => {
+		pattern => qr/(\d+) with incorrect version number/,
+		unit_of_measurement => '',
+	},
+	'ip6_fragments_received' => {
+		pattern => qr/(\d+) fragments received/,
+		unit_of_measurement => '',
+	},
+	'ip6_fragments_dropped_for_dup_or_out_of_space' => {
+		pattern => qr/(\d+) fragments dropped \(dup or out of space\)/,
+		unit_of_measurement => '',
+	},
+	'ip6_fragments_dropped_after_timeout' => {
+		pattern => qr/(\d+) fragments dropped after timeout/,
+		unit_of_measurement => '',
+	},
+	'ip6_fragments_that_exceeded_limit' => {
+		pattern => qr/(\d+) fragments that exceeded limit/,
+		unit_of_measurement => '',
+	},
+	'ip6_packets_reassembled_ok' => {
+		pattern => qr/(\d+) packets reassembled ok/,
+		unit_of_measurement => '',
+	},
+	'ip6_packets_for_this_host' => {
+		pattern => qr/(\d+) packets for this host/,
+		unit_of_measurement => '',
+	},
+	'ip6_packets_forwarded' => {
+		pattern => qr/(\d+) packets forwarded/,
+		unit_of_measurement => '',
+	},
+	'ip6_packets_not_forwardable' => {
+		pattern => qr/(\d+) packets not forwardable/,
+		unit_of_measurement => '',
+	},
+	'ip6_redirects_sent' => {
+		pattern => qr/(\d+) redirects sent/,
+		unit_of_measurement => '',
+	},
+	'ip6_packets_sent_from_this_host' => {
+		pattern => qr/(\d+) packets sent from this host/,
+		unit_of_measurement => '',
+	},
+	'ip6_packets_sent_with_fabricated_ip_header' => {
+		pattern => qr/(\d+) packets sent with fabricated ip header/,
+		unit_of_measurement => '',
+	},
+	'ip6_output_packets_dropped' => {
+		pattern => qr/(\d+) output packets dropped due to no bufs, etc./,
+		unit_of_measurement => '',
+	},
+	'ip6_output_packets_discarded_due_to_no_route' => {
+		pattern => qr/(\d+) output packets discarded due to no route/,
+		unit_of_measurement => '',
+	},
+	'ip6_output_datagrams_fragmented' => {
+		pattern => qr/(\d+) output datagrams fragmented/,
+		unit_of_measurement => '',
+	},
+	'ip6_fragments_created' => {
+		pattern => qr/(\d+) fragments created/,
+		unit_of_measurement => '',
+	},
+	'ip6_datagrams_that_cant_be_fragmented' => {
+		pattern => qr/(\d+) datagrams that can't be fragmented/,
+		unit_of_measurement => '',
+	},
+	'ip6_packets_that_violated_scope_rules' => {
+		pattern => qr/(\d+) packets that violated scope rules/,
+		unit_of_measurement => '',
+	},
+	'ip6_multicast_packets_which_we_dont_join' => {
+		pattern => qr/(\d+) multicast packets which we don't join/,
+		unit_of_measurement => '',
+	},
+	'ip6_TCP_input' => {
+		pattern => qr/TCP: (\d+)/,
+		unit_of_measurement => '',
+	},
+	'ip6_ICMP_input' => {
+		pattern => qr/ICMP(\d+): (\d+)/,
+		unit_of_measurement => '',
+	},
+	'ip6_one_mbuf' => {
+		pattern => qr/(\d+) one mbuf/,
+		unit_of_measurement => '',
+	},
+	'ip6_one_ext_mbuf' => {
+		pattern => qr/(\d+) one ext mbuf/,
+		unit_of_measurement => '',
+	},
+	'ip6_two_or_more_ext_mbuf' => {
+		pattern => qr/(\d+) two or more ext mbuf/,
+		unit_of_measurement => '',
+	},
+	'ip6_packets_whose_headers_are_not_continuous' => {
+		pattern => qr/(\d+) packets whose headers are not continuous/,
+		unit_of_measurement => '',
+	},
+	'ip6_tunneling_packets_that_cant_find_gif' => {
+		pattern => qr/(\d+) tunneling packets that can't find gif/,
+		unit_of_measurement => '',
+	},
+	'ip6_packets_discarded_because_of_too_many_headers' => {
+		pattern => qr/(\d+) packets discarded because of too many headers/,
+		unit_of_measurement => '',
+	},
+	'ip6_failures_of_source_address_selection' => {
+		pattern => qr/(\d+) failures of source address selection/,
+		unit_of_measurement => '',
+	},
+	'ip6_forward_cache_hit' => {
+		pattern => qr/(\d+) forward cache hit/,
+		unit_of_measurement => '',
+	},
+	'ip6_forward_cache_miss' => {
+		pattern => qr/(\d+) forward cache miss/,
+		unit_of_measurement => '',
+	},
+	'ip6_source_address_selection_rule_first_candidate' => {
+		pattern => qr/(\d+) first candidate/,
+		unit_of_measurement => '',
+	},
+	'ip6_source_address_selection_rule_same_address' => {
+		pattern => qr/(\d+) same address/,
+		unit_of_measurement => '',
+	},
+	'icmp6_calls_to_icmp_error' => {
+		pattern => qr/(\d+) calls to icmp(\d+)_error/,
+		unit_of_measurement => '',
+	},
+	'icmp6_errors_not_generated_in_response_to_an_icmp_message' => {
+		pattern => qr/(\d+) errors not generated in response to an icmp(\d+) message/,
+		unit_of_measurement => '',
+	},
+	'icmp6_errors_not_generated_because_of_rate_limitation' => {
+		pattern => qr/(\d+) errors not generated because of rate limitation/,
+		unit_of_measurement => '',
+	},
+	'icmp6_echo_output' => {
+		pattern => qr/echo: (\d+)/,
+		unit_of_measurement => '',
+	},
+	'icmp6_echo_reply_output' => {
+		pattern => qr/echo reply: (\d+)/,
+		unit_of_measurement => '',
+	},
+	'icmp6_multicast_listener_report_output' => {
+		pattern => qr/multicast listener report: (\d+)/,
+		unit_of_measurement => '',
+	},
+	'icmp6_messages_with_bad_code_fields' => {
+		pattern => qr/(\d+) messages with bad code fields/,
+		unit_of_measurement => '',
+	},
+	'icmp6_messages_less_than_minimum_length' => {
+		pattern => qr/(\d+) messages < minimum length/,
+		unit_of_measurement => '',
+	},
+	'icmp6_bad_checksums' => {
+		pattern => qr/(\d+) bad checksums/,
+		unit_of_measurement => '',
+	},
+	'icmp6_messages_with_bad_length' => {
+		pattern => qr/(\d+) messages with bad length/,
+		unit_of_measurement => '',
+	},
+	'icmp6_echo_input' => {
+		pattern => qr/echo: (\d+)/,
+		unit_of_measurement => '',
+	},
+	'icmp6_echo_reply_input' => {
+		pattern => qr/echo reply: (\d+)/,
+		unit_of_measurement => '',
+	},
+	'icmp6_no_route_errors' => {
+		pattern => qr/(\d+) no route/,
+		unit_of_measurement => '',
+	},
+	'icmp6_administratively_prohibited_errors' => {
+		pattern => qr/(\d+) administratively prohibited/,
+		unit_of_measurement => '',
+	},
+	'icmp6_beyond_scope_errors' => {
+		pattern => qr/(\d+) beyond scope/,
+		unit_of_measurement => '',
+	},
+	'icmp6_address_unreachable_errors' => {
+		pattern => qr/(\d+) address unreachable/,
+		unit_of_measurement => '',
+	},
+	'icmp6_port_unreachable_errors' => {
+		pattern => qr/(\d+) port unreachable/,
+		unit_of_measurement => '',
+	},
+	'icmp6_packet_too_big_errors' => {
+		pattern => qr/(\d+) packet too big/,
+		unit_of_measurement => '',
+	},
+	'icmp6_time_exceed_transit_errors' => {
+		pattern => qr/(\d+) time exceed transit/,
+		unit_of_measurement => '',
+	},
+	'icmp6_time_exceed_reassembly_errors' => {
+		pattern => qr/(\d+) time exceed reassembly/,
+		unit_of_measurement => '',
+	},
+	'icmp6_erroneous_header_field_errors' => {
+		pattern => qr/(\d+) erroneous header field/,
+		unit_of_measurement => '',
+	},
+	'icmp6_unrecognized_next_header_errors' => {
+		pattern => qr/(\d+) unrecognized next header/,
+		unit_of_measurement => '',
+	},
+	'icmp6_unrecognized_option_errors' => {
+		pattern => qr/(\d+) unrecognized option/,
+		unit_of_measurement => '',
+	},
+	'icmp6_redirect_errors' => {
+		pattern => qr/(\d+) redirect/,
+		unit_of_measurement => '',
+	},
+	'icmp6_unknown_errors' => {
+		pattern => qr/(\d+) unknown/,
+		unit_of_measurement => '',
+	},
+	'icmp6_message_response_generated' => {
+		pattern => qr/(\d+) message response generated/,
+		unit_of_measurement => '',
+	},
+	'icmp6_messages_with_too_many_ND_options' => {
+		pattern => qr/(\d+) messages with too many ND options/,
+		unit_of_measurement => '',
+	},
+	'icmp6_messages_with_bad_ND_options' => {
+		pattern => qr/(\d+) messages with bad ND options/,
+		unit_of_measurement => '',
+	},
+	'icmp6_bad_neighbor_solicitation_messages' => {
+		pattern => qr/(\d+) bad neighbor solicitation messages/,
+		unit_of_measurement => '',
+	},
+	'icmp6_bad_neighbor_advertisement_messages' => {
+		pattern => qr/(\d+) bad neighbor advertisement messages/,
+		unit_of_measurement => '',
+	},
+	'icmp6_bad_router_solicitation_messages' => {
+		pattern => qr/(\d+) bad router solicitation messages/,
+		unit_of_measurement => '',
+	},
+	'icmp6_bad_router_advertisement_messages' => {
+		pattern => qr/(\d+) bad router advertisement messages/,
+		unit_of_measurement => '',
+	},
+	'icmp6_bad_redirect_messages' => {
+		pattern => qr/(\d+) bad redirect messages/,
+		unit_of_measurement => '',
+	},
+	'icmp6_path_MTU_changes' => {
+		pattern => qr/(\d+) path MTU changes/,
+		unit_of_measurement => '',
+	},
+	'rip6_messages_received' => {
+		pattern => qr/(\d+) messages received/,
+		unit_of_measurement => '',
+	},
+	'rip6_checksum_calcurations_on_inbound' => {
+		pattern => qr/(\d+) checksum calcurations on inbound/,
+		unit_of_measurement => '',
+	},
+	'rip6_messages_with_bad_checksum' => {
+		pattern => qr/(\d+) messages with bad checksum/,
+		unit_of_measurement => '',
+	},
+	'rip6_messages_dropped_due_to_no_socket' => {
+		pattern => qr/(\d+) messages dropped due to no socket/,
+		unit_of_measurement => '',
+	},
+	'rip6_multicast_messages_dropped_due_to_no_socket' => {
+		pattern => qr/(\d+) multicast messages dropped due to no socket/,
+		unit_of_measurement => '',
+	},
+	'rip6_messages_dropped_due_to_full_socket_buffers' => {
+		pattern => qr/(\d+) messages dropped due to full socket buffers/,
+		unit_of_measurement => '',
+	},
+	'rip6_delivered' => {
+		pattern => qr/(\d+) delivered/,
+		unit_of_measurement => '',
+	},
+	'rip6_datagrams_output' => {
+		pattern => qr/(\d+) datagrams output/,
+		unit_of_measurement => '',
+	},
+);
+my $available_measurements = join("\n",sort(keys(%measurements)));
+
+
+### Initialize the plugin
+my $plugin = Nagios::Plugin->new( 
+	shortname => "FREEBSD",
+    usage => "Usage: check_freebsd_network [-m measurement] "
+    	    ."-w <warning_threshold> -c <critical_threshold> [--help] "
+			."[-p protocol] [-v] -[t timeout]",
+	version => '0.1.0',
+	url     => 'http://fragmentedzen.com/software/check_freebsd',
+	license => 'This nagios plugin is free software, and comes with '
+			  ."ABSOLUTELY NO WARRANTY.\nIt may be used, redistributed "
+			  ."and/or modified under the terms of the \nGNU General "
+			  .'Public Licence. See LICENSE.txt for more information.',
+	plugin  => 'check_freebsd_network',
+	extra	=> "\n".scalar(keys(%measurements)). " available measurements.\n"
+			  ."For full list of measurements, run $0 --measurement list",
+);
+
+
+### Add arguments for warning, critical, and measurement
+$plugin->add_arg(
+	spec => 'warning|w=s',
+	help => "-w, --warning=INTEGER\n   Threshold at which this measurement "
+		   .'should generate a WARNING condiiton'
+);
+$plugin->add_arg(
+	spec => 'critical|c=s',
+	help => "-c, --critical=INTEGER\n   Threshold at which this measurement "
+		   .'should generate a CRITICAL condiiton'
+);
+$plugin->add_arg(
+	spec => 'measurement|m=s',
+	help => "-m --measurement=STRING\n   Determines which measurement to extract.",
+	required => 1,
+);
+
+
+### Parse command line options
+$plugin->getopts;
+$plugin->set_thresholds(
+	warning => $plugin->opts->warning,
+	critical => $plugin->opts->critical,
+);
+print 'Dump of $plugin: ' . Dumper($plugin) if $plugin->opts()->verbose >= 3;
+
+
+### Just dump the measurement list if that's all they're asking for
+if($plugin->opts->measurement eq 'list'){
+	print scalar(keys(%measurements)). " available measurements:\n$available_measurements\n";
+	$plugin->nagios_exit( UNKNOWN, 'Listing measurements and exiting');
+}
+
+
+### Make sure the measurement they gave is a valid one
+unless($measurements{$plugin->opts->measurement}) {
+	my $status_message = 'Invalid measurement: '.$plugin->opts->measurement;
+	print "$status_message\nAvailable measurements: $available_measurements\n"
+		if $plugin->opts->verbose >= 1;
+	$plugin->nagios_exit( UNKNOWN, $status_message);
+}
+
+
+### Set timeout clock
+alarm($plugin->opts()->timeout);
+local $SIG{ALRM} = sub { 
+	$plugin->nagios_exit( UNKNOWN, "Host timed out" );
+};
+
+
+### Make sure we can get to netstat(1)
+unless( -e '/usr/bin/netstat'){
+	$plugin->nagios_exit( UNKNOWN, "No netstat in /usr/bin/");
+}
+unless( -f '/usr/bin/netstat'){
+	my $error_message = 'Netstat at /usr/bin/netstat not a plain file.';
+	print "$error_message\nMake sure netstat isn't a directory, symbolic link, named pipe, or block file\n"
+		if $plugin->opts->verbose >=1;
+	$plugin->nagios_exit( UNKNOWN, $error_message);
+}
+unless( -x '/usr/bin/netstat'){
+	$plugin->nagios_exit( UNKNOWN, '/usr/bin/netstat is not executable');
+}
+
+
+### Pull and parse netstat(1)
+my $netstat = `/usr/bin/netstat -s`||
+	$plugin->nagios_exit( UNKNOWN, "Netstat -s returned status $?");
+print "netstat response:\n$netstat\n\n" if $plugin->opts->verbose >= 3;
+
+
+### Stop here unless netstat(1) gave us something
+unless($netstat){
+	my $response = "No usable data in netstat(1) response";
+	print "$response:\n$netstat\n\n" 
+		if $plugin->opts->verbose >= 2;
+	$plugin->nagios_exit(UNKNOWN, $response);
+}
+
+
+### Pull out protocol's netstat -s stanza (protocols can collide on reported data keys)
+my ($protocol, @test) = split /_/,$plugin->opts->measurement;
+print "Detected procol $protocol in measurement.\n" if $plugin->opts->verbose >= 2;
+### Potentially non-obvious REGEXP here: split /\n\b/ works to split
+### the protocol stanzas returned by netstat -s because the end of each stanza can be
+### uniquely characterized by a newline \n followed by a word boundary \b
+my @correct_stanza = grep(/^$protocol/,split(/\n\b/,$netstat));
+
+### Parse count
+my $value = '';
+if($correct_stanza[0] =~ $measurements{$plugin->opts->measurement}->{pattern}) {
+	$value = $1;
+}
+my $status_message = $value . ' ' . $plugin->opts->measurement;
+
+
+### Prepare Performance Data
+$plugin->add_perfdata(
+	label => $plugin->opts->measurement,
+	value => $value,
+	uom => $measurements{$plugin->opts->measurement}->{unit_of_measurement},
+	threshold => $plugin->threshold
+);
+
+
+### Return the status message
+my $status_code = $plugin->check_threshold($value);
+$plugin->nagios_exit( $status_code, $status_message ) 
+	if $status_code != OK;
+$plugin->nagios_exit( UNKNOWN, $status_message )
+	if $status_code == OK && !($plugin->opts->warning && $plugin->opts->critical);
+$plugin->nagios_exit( OK, $status_message );
+
+
+=head1 DESCRIPTION
+
+This script acts as a plugin module for the Nagios IT infrastructure monitoring 
+system. It on a FreeBSD server to pull network status information from netstat(1).
+This plugin reports on the following 322 network statistics:
+
+=over 4
+
+=item * icmp6_address_unreachable_errors
+
+=item * icmp6_administratively_prohibited_errors
+
+=item * icmp6_bad_checksums
+
+=item * icmp6_bad_neighbor_advertisement_messages
+
+=item * icmp6_bad_neighbor_solicitation_messages
+
+=item * icmp6_bad_redirect_messages
+
+=item * icmp6_bad_router_advertisement_messages
+
+=item * icmp6_bad_router_solicitation_messages
+
+=item * icmp6_beyond_scope_errors
+
+=item * icmp6_calls_to_icmp_error
+
+=item * icmp6_echo_input
+
+=item * icmp6_echo_output
+
+=item * icmp6_echo_reply_input
+
+=item * icmp6_echo_reply_output
+
+=item * icmp6_erroneous_header_field_errors
+
+=item * icmp6_errors_not_generated_because_of_rate_limitation
+
+=item * icmp6_errors_not_generated_in_response_to_an_icmp_message
+
+=item * icmp6_message_response_generated
+
+=item * icmp6_messages_less_than_minimum_length
+
+=item * icmp6_messages_with_bad_ND_options
+
+=item * icmp6_messages_with_bad_code_fields
+
+=item * icmp6_messages_with_bad_length
+
+=item * icmp6_messages_with_too_many_ND_options
+
+=item * icmp6_multicast_listener_report_output
+
+=item * icmp6_no_route_errors
+
+=item * icmp6_packet_too_big_errors
+
+=item * icmp6_path_MTU_changes
+
+=item * icmp6_port_unreachable_errors
+
+=item * icmp6_redirect_errors
+
+=item * icmp6_time_exceed_reassembly_errors
+
+=item * icmp6_time_exceed_transit_errors
+
+=item * icmp6_unknown_errors
+
+=item * icmp6_unrecognized_next_header_errors
+
+=item * icmp6_unrecognized_option_errors
+
+=item * icmp_ICMP_address_mask_responses_are_disabled
+
+=item * icmp_bad_checksums
+
+=item * icmp_calls_to_icmp_error
+
+=item * icmp_destination_unreachable_input
+
+=item * icmp_destination_unreachable_output
+
+=item * icmp_echo_input
+
+=item * icmp_echo_reply_input
+
+=item * icmp_echo_reply_output
+
+=item * icmp_errors_not_generated_in_response_to_an_icmp_message
+
+=item * icmp_invalid_return_addresses
+
+=item * icmp_message_responses_generated
+
+=item * icmp_messages_less_than_minimum_length
+
+=item * icmp_messages_with_bad_code_fields
+
+=item * icmp_messages_with_bad_length
+
+=item * icmp_multicast_echo_requests_ignored
+
+=item * icmp_multicast_timestamp_requests_ignored
+
+=item * icmp_no_return_routes
+
+=item * icmp_routing_redirect_input
+
+=item * icmp_time_exceeded_input
+
+=item * igmp_membership_queries_received
+
+=item * igmp_membership_queries_received_with_invalid_field
+
+=item * igmp_membership_reports_received
+
+=item * igmp_membership_reports_received_for_groups_to_which_we_belong
+
+=item * igmp_membership_reports_received_with_invalid_field
+
+=item * igmp_membership_reports_sent
+
+=item * igmp_messages_received
+
+=item * igmp_messages_received_with_bad_checksum
+
+=item * igmp_messages_received_with_too_few_bytes
+
+=item * ip6_ICMP_input
+
+=item * ip6_TCP_input
+
+=item * ip6_datagrams_that_cant_be_fragmented
+
+=item * ip6_failures_of_source_address_selection
+
+=item * ip6_forward_cache_hit
+
+=item * ip6_forward_cache_miss
+
+=item * ip6_fragments_created
+
+=item * ip6_fragments_dropped_after_timeout
+
+=item * ip6_fragments_dropped_for_dup_or_out_of_space
+
+=item * ip6_fragments_received
+
+=item * ip6_fragments_that_exceeded_limit
+
+=item * ip6_multicast_packets_which_we_dont_join
+
+=item * ip6_one_ext_mbuf
+
+=item * ip6_one_mbuf
+
+=item * ip6_output_datagrams_fragmented
+
+=item * ip6_output_packets_discarded_due_to_no_route
+
+=item * ip6_output_packets_dropped
+
+=item * ip6_packets_discarded_because_of_too_many_headers
+
+=item * ip6_packets_for_this_host
+
+=item * ip6_packets_forwarded
+
+=item * ip6_packets_not_forwardable
+
+=item * ip6_packets_reassembled_ok
+
+=item * ip6_packets_received_with_data_size_less_than_data_length
+
+=item * ip6_packets_received_with_size_smaller_than_minimum
+
+=item * ip6_packets_sent_from_this_host
+
+=item * ip6_packets_sent_with_fabricated_ip_header
+
+=item * ip6_packets_that_violated_scope_rules
+
+=item * ip6_packets_whose_headers_are_not_continuous
+
+=item * ip6_redirects_sent
+
+=item * ip6_source_address_selection_rule_first_candidate
+
+=item * ip6_source_address_selection_rule_same_address
+
+=item * ip6_total_packets_received
+
+=item * ip6_tunneling_packets_that_cant_find_gif
+
+=item * ip6_two_or_more_ext_mbuf
+
+=item * ip6_with_bad_options
+
+=item * ip6_with_incorrect_version_number
+
+=item * ip_bad_header_checksums
+
+=item * ip_datagrams_that_cant_be_fragmented
+
+=item * ip_datagrams_with_bad_address_in_header
+
+=item * ip_fragments_created
+
+=item * ip_fragments_dropped_after_timeout
+
+=item * ip_fragments_dropped_for_dup_or_out_of_space
+
+=item * ip_fragments_received
+
+=item * ip_output_datagrams_fragmented
+
+=item * ip_output_packets_discarded_due_to_no_route
+
+=item * ip_output_packets_dropped
+
+=item * ip_packets_fast_forwarded
+
+=item * ip_packets_for_this_host
+
+=item * ip_packets_for_unknown_or_unsupported_protocol
+
+=item * ip_packets_forwarded
+
+=item * ip_packets_not_forwardable
+
+=item * ip_packets_reassembled_ok
+
+=item * ip_packets_received_for_unknown_multicast_group
+
+=item * ip_packets_sent_from_this_host
+
+=item * ip_packets_sent_with_fabricated_ip_header
+
+=item * ip_redirects_sent
+
+=item * ip_total_packets_received
+
+=item * ip_tunneling_packets_that_cant_find_gif
+
+=item * ip_with_bad_options
+
+=item * ip_with_data_length_less_than_header_length
+
+=item * ip_with_data_size_less_than_data_length
+
+=item * ip_with_header_length_less_than_data_size
+
+=item * ip_with_incorrect_version_number
+
+=item * ip_with_ip_length_greater_than_max_ip_packet_size
+
+=item * ip_with_size_smaller_than_minimum
+
+=item * rip6_checksum_calcurations_on_inbound
+
+=item * rip6_datagrams_output
+
+=item * rip6_delivered
+
+=item * rip6_messages_dropped_due_to_full_socket_buffers
+
+=item * rip6_messages_dropped_due_to_no_socket
+
+=item * rip6_messages_received
+
+=item * rip6_messages_with_bad_checksum
+
+=item * rip6_multicast_messages_dropped_due_to_no_socket
+
+=item * sctp_FRs_that_happened_more_than_once_to_same_chunk_
+
+=item * sctp_RFC813_allowed_sending
+
+=item * sctp_RFC813_does_not_allow_sending
+
+=item * sctp_bad_SID
+
+=item * sctp_bad_v_tag
+
+=item * sctp_cached_chunks_used
+
+=item * sctp_cached_stream_oqs_used
+
+=item * sctp_checksum_error
+
+=item * sctp_collision_in_express_lookup_
+
+=item * sctp_fast_retransmitted_DATA_chunks
+
+=item * sctp_input_AUTH_chunks
+
+=item * sctp_input_DATA_chunks
+
+=item * sctp_input_ECNE_chunks
+
+=item * sctp_input_HB_ACK_chunks
+
+=item * sctp_input_HB_chunks
+
+=item * sctp_input_SACK_chunks
+
+=item * sctp_input_auth_failed
+
+=item * sctp_input_chunks_missing_AUTH
+
+=item * sctp_input_datagrams
+
+=item * sctp_input_duplicate_DATA_chunks
+
+=item * sctp_input_fast_path_multi_part_data
+
+=item * sctp_input_fast_path_receives_all_one_chunk
+
+=item * sctp_input_packets
+
+=item * sctp_input_packets_that_had_data
+
+=item * sctp_intput_HB_chunks
+
+=item * sctp_invalid_HMAC_ids_received
+
+=item * sctp_invalid_secret_ids_received
+
+=item * sctp_ip_output_error_counter
+
+=item * sctp_look_ahead_tells_us_no_memory_in_interface
+
+=item * sctp_max_burst_dosnt_allow_sending
+
+=item * sctp_no_endpoint_for_port
+
+=item * sctp_no_memory
+
+=item * sctp_number_of_in_data_drops_due_to_chunk_limit_reached
+
+=item * sctp_number_of_in_data_drops_due_to_rwnd_limit_reached
+
+=item * sctp_number_of_map_array_over_runs_via_fwd_tsns
+
+=item * sctp_number_of_multiple_FR_in_a_RTT_window
+
+=item * sctp_numbers_of_window_probes_sent
+
+=item * sctp_output_AUTH_chunks
+
+=item * sctp_output_DATA_chunks
+
+=item * sctp_output_ECNE_chunks
+
+=item * sctp_output_SACKs
+
+=item * sctp_output_packets
+
+=item * sctp_packet_dropped_TSN_s_marked_for_Fast_Retran
+
+=item * sctp_packet_dropped_attempt_reverse_TSN_lookup
+
+=item * sctp_packet_dropped_data_did_not_match_TSN
+
+=item * sctp_packet_dropped_e_host_confirms_zero_rwnd
+
+=item * sctp_packet_dropped_failed_to_find_TSN
+
+=item * sctp_packet_dropped_from_end_host
+
+=item * sctp_packet_dropped_from_middle_box
+
+=item * sctp_packet_dropped_midbox_confirms_no_space
+
+=item * sctp_packet_dropped_non_data_non_endhost
+
+=item * sctp_packet_dropped_non_endhost_bandwidth_rep_only
+
+=item * sctp_packet_dropped_not_enough_data_to_confirm
+
+=item * sctp_packet_dropped_not_enough_for_chunk_header
+
+=item * sctp_packet_dropped_where_process_chunk_drop_said_break
+
+=item * sctp_packet_dropped_with_data
+
+=item * sctp_packet_shorter_than_header
+
+=item * sctp_retransmitted_DATA_chunks
+
+=item * sctp_sacks_the_slow_way
+
+=item * sctp_same_for_above
+
+=item * sctp_send_burst_avoidance_already_max_burst_inflight_to_net
+
+=item * sctp_send_cwnd_full_avoidance_already_max_burst_inflight_to_net
+
+=item * sctp_sends_with_ABORT_flag_set
+
+=item * sctp_sends_with_EOF_flag_set
+
+=item * sctp_sends_with_sinfo_nonzero_flags
+
+=item * sctp_timeouts_INIT_timers_fired
+
+=item * sctp_timeouts_PMTU_timers_fired
+
+=item * sctp_timeouts_T3_data_time_outs
+
+=item * sctp_timeouts_a_cookie_timeout_fired
+
+=item * sctp_timeouts_an_asconf_timer_fired
+
+=item * sctp_timeouts_an_endpoint_changed_its_cookiesecret
+
+=item * sctp_timeouts_asoc_free_timers_expired
+
+=item * sctp_timeouts_auto_close_timer_fired
+
+=item * sctp_timeouts_early_FR_timers_fired
+
+=item * sctp_timeouts_heartbeat_timers_fired
+
+=item * sctp_timeouts_inp_free_timers_expired
+
+=item * sctp_timeouts_iterator_timers_fired
+
+=item * sctp_timeouts_sack_timers_fired
+
+=item * sctp_timeouts_shutdown_ack_timers_fired
+
+=item * sctp_timeouts_shutdown_guard_timers_fired
+
+=item * sctp_timeouts_shutdown_timers_fired
+
+=item * sctp_timeouts_stream_reset_timers_fired
+
+=item * sctp_timeouts_window_probe_timers_fired
+
+=item * sctp_times_a_ECN_reduced_the_cwnd
+
+=item * sctp_times_an_output_error_to_clamp_down_on_next_user_send
+
+=item * sctp_times_protocol_drain_called
+
+=item * sctp_times_recv_was_called_with_peek
+
+=item * sctp_times_sctp_senderrors_were_caused_from_a_user
+
+=item * sctp_times_the_sender_ran_dry_of_user_data_on_primary
+
+=item * sctp_times_we_did_a_protocol_drain
+
+=item * sctp_unordered_sends
+
+=item * sctp_unread_messages_abandonded_by_close
+
+=item * sctp_used_express_lookup_via_vtag
+
+=item * sctp_window_update_only_sacks_sent
+
+=item * tcp_SACK_options_received
+
+=item * tcp_SACK_options_sent
+
+=item * tcp_SACK_recovery_episodes
+
+=item * tcp_SACK_scoreboard_overflow
+
+=item * tcp_bad_connection_attempts
+
+=item * tcp_byte_rexmits_in_SACK_recovery_episodes
+
+=item * tcp_connection_accepts
+
+=item * tcp_connection_requests
+
+=item * tcp_connections_closed
+
+=item * tcp_connections_dropped
+
+=item * tcp_connections_dropped_because_of_timeout
+
+=item * tcp_connections_dropped_by_keepalive
+
+=item * tcp_connections_dropped_by_persist_timeout
+
+=item * tcp_connections_dropped_by_rexmit_timeout
+
+=item * tcp_connections_established_including_accepts
+
+=item * tcp_connections_updated_cached_RTT_on_close
+
+=item * tcp_connections_updated_cached_RTT_variance_on_close
+
+=item * tcp_connections_updated_cached_ssthresh_on_close
+
+=item * tcp_cookies_received
+
+=item * tcp_cookies_sent
+
+=item * tcp_correct_ACK_header_predictions
+
+=item * tcp_correct_data_packet_header_predictions
+
+=item * tcp_embryonic_connections_dropped
+
+=item * tcp_ignored_RSTs_in_the_windows
+
+=item * tcp_keepalive_probes_sent
+
+=item * tcp_keepalive_timeouts
+
+=item * tcp_listen_queue_overflows
+
+=item * tcp_packets_received
+
+=item * tcp_packets_sent
+
+=item * tcp_persist_timeouts
+
+=item * tcp_received_acks
+
+=item * tcp_received_acks_for_unsent_data
+
+=item * tcp_received_acks_within_bytes
+
+=item * tcp_received_bytes_in_sequence
+
+=item * tcp_received_bytes_of_data_after_window
+
+=item * tcp_received_completely_duplicate_packets
+
+=item * tcp_received_completely_duplicate_packets_byte_total
+
+=item * tcp_received_duplicate_acks
+
+=item * tcp_received_old_duplicate_packets
+
+=item * tcp_received_out_of_order_packets
+
+=item * tcp_received_out_of_order_packets_byte_total
+
+=item * tcp_received_packets_discarded_because_packet_too_short
+
+=item * tcp_received_packets_discarded_due_to_memory_problems
+
+=item * tcp_received_packets_discarded_for_bad_checksums
+
+=item * tcp_received_packets_discarded_for_bad_header_offset_fields
+
+=item * tcp_received_packets_in_sequence
+
+=item * tcp_received_packets_of_data_after_window
+
+=item * tcp_received_packets_received_after_close
+
+=item * tcp_received_packets_with_some_dup_data
+
+=item * tcp_received_packets_with_some_dup_data_bytes_total
+
+=item * tcp_received_window_probes
+
+=item * tcp_received_window_update_packets
+
+=item * tcp_retransmit_timeouts
+
+=item * tcp_segment_rexmits_in_SACK_recovery_episodes
+
+=item * tcp_segments_update_rtt_attempts
+
+=item * tcp_segments_updated_rtt
+
+=item * tcp_sent_URG_only_packets
+
+=item * tcp_sent_ack_only_packets
+
+=item * tcp_sent_ack_only_packets_delayed
+
+=item * tcp_sent_control_packets
+
+=item * tcp_sent_data_bytes
+
+=item * tcp_sent_data_bytes_retransmitted
+
+=item * tcp_sent_data_packets
+
+=item * tcp_sent_data_packets_retransmitted
+
+=item * tcp_sent_data_packets_unnecessarily_retransmitted
+
+=item * tcp_sent_resends_initiated_by_MTU_discovery
+
+=item * tcp_sent_window_probe_packets
+
+=item * tcp_sent_window_update_packets
+
+=item * tcp_syncache_entries_aborted
+
+=item * tcp_syncache_entries_added
+
+=item * tcp_syncache_entries_badack
+
+=item * tcp_syncache_entries_bucket_overflow
+
+=item * tcp_syncache_entries_cache_overflow
+
+=item * tcp_syncache_entries_completed
+
+=item * tcp_syncache_entries_dropped
+
+=item * tcp_syncache_entries_dupsyn
+
+=item * tcp_syncache_entries_reset
+
+=item * tcp_syncache_entries_retransmitted
+
+=item * tcp_syncache_entries_stale
+
+=item * tcp_syncache_entries_unreach
+
+=item * tcp_syncache_entries_zone_failures
+
+=item * udp_broadcast_multicast_datagrams_undelivered
+
+=item * udp_datagrams_output
+
+=item * udp_datagrams_received
+
+=item * udp_delivered
+
+=item * udp_dropped_due_to_full_socket_buffers
+
+=item * udp_dropped_due_to_no_socket
+
+=item * udp_dropped_not_for_hashed_pcb
+
+=item * udp_times_multicast_source_filter_matched
+
+=item * udp_with_bad_checksum
+
+=item * udp_with_bad_data_length_field
+
+=item * udp_with_incomplete_header
+
+=item * udp_with_no_checksum
+
+=back
+
+This has been tested with FreeBSD 7.1. 
+
+=head1 SYNOPSIS
+
+=head2 Command Line Interface
+
+Get the total number of TCP packets discarded for bad header checksums:
+
+	check_freebsd_network -m tcp_received_packets_discarded_for_bad_checksums -w 100 -c 1000
+
+Get the number of IP packets received for an unknown or unsupported protocol:
+
+	check_freebsd_network -m ip_packets_for_unknown_or_unsupported_protocol -w 1000 -c 10000
+
+Get the number of ICMP messages with bad code fields:
+
+	check_freebsd_network -m icmp_messages_with_bad_code_fields -w 100 -c 1000
+
+Run this script with command line options stored in a configuration file:
+
+	check_freebsd_network --extra-opts=my_config.ini
+
+=head1 SEE ALSO
+
+If using an external configuration file, it should be structured according to 
+the specification at <http://nagiosplugins.org/extra-opts/>.
+
+Thresholds given to this script should be in the format specified at 
+<http://nagiosplug.sourceforge.net/developer-guidelines.html#THRESHOLDFORMAT>.
+
+This module is built upon L<Nagios::Plugin> by the Nagios Plugin Development
+Team.  Further reading on Nagios, NPRE, and Nagios Plugins is available at
+<http://nagios.com/>.
+
+=head1 AUTHOR
+
+This script is written and maintained by Dann Stayskal <dann@stayskal.com>
+and is available on his website, at
+<http://fragmentedzen.com/software/check_freebsd/>.
+
+=head1 LICENSE
+
+Copyright (C) 2009 by Dann Stayskal.
+
+This program is free software; you can redistribute it and/or modify it under 
+the terms of the GNU General Public License as published by the Free Software 
+Foundation; either version 2 of the License, or (at your option) any later 
+version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY 
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A 
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with 
+this program; if not, write to the Free Software Foundation, Inc., 59 Temple 
+Place, Suite 330, Boston, MA 02111-1307 USA
+
+Nagios, the Nagios logo, and Nagios graphics are the servicemarks, trademarks, 
+or registered trademarks owned by Nagios Enterprises. All other servicemarks 
+and trademarks are the property of their respective owner.
+
+=cut
